@@ -18,223 +18,245 @@ tm_IncrementSave
 """
 
 
-import os
-import json
 import re
-import maya.api.OpenMaya as om  # 外部モジュール
-import maya.cmds as cmds  # 外部モジュール
-
-# 設定ファイル
-FOLDER = "~/Documents/maya/scripts/tm_script/tm_IncrementSave"
-CONFIG_FILE = "tm_increment_save.json"
-JSON_FOLDER = os.path.expanduser(
-    f"{FOLDER}/json_folder"
-)
-
-if not os.path.exists(JSON_FOLDER):
-    os.makedirs(JSON_FOLDER)
-
-DEFAULT_CONFIG = {
-    "enable": True,
-    "limit": 20,
-    "use_subfolder": True,
-    "subfolder_name": "backup"
-}
+import os
+import maya.cmds as cmds
+import shutil
 
 
-WINDOW_NAME = "IncrementalSaveUI"
+WINDOW_NAME = "tm_IncrementSave"
 
 
-# 設定IO
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        save_config(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG
-    with open(CONFIG_FILE, "r") as f:
-        return json.load(f)
+# メイン処理
+def save_backup():
+    """
+    現在のMayaシーンを上書き保存後、
+    指定バックアップフォルダへ連番保存
+    """
 
+    scene_path = cmds.file(q=True, sceneName=True)
 
-def save_config(cfg):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(cfg, f, indent=4)
+    if not scene_path:
+        cmds.warning(u"シーンが保存されていません。先に保存してください。")
+        return
 
+    cmds.file(save=True)
 
-# インクリメント保存処理
-SUFFIX = "_sv"
-DIGITS = 4
+    scene_name = os.path.basename(scene_path)
+    file_name, ext = os.path.splitext(scene_name)
 
+    # UIからバックアップ先取得
+    backup_dir = cmds.textField(
+        "backupFolderField",
+        q=True,
+        text=True
+    )
 
-def get_scene_path():
-    return cmds.file(q=True, sn=True)
-
-
-def split_path(path):
-    d = os.path.dirname(path)
-    f = os.path.basename(path)
-    name, ext = os.path.splitext(f)
-    return d, name, ext
-
-
-def get_backup_dir(base_dir, cfg):
-    if not cfg["use_subfolder"]:
-        return base_dir
-
-    backup_dir = os.path.join(base_dir, cfg["subfolder_name"])
+    if not backup_dir:
+        cmds.warning(u"バックアップフォルダが指定されていません。")
+        return
 
     if not os.path.exists(backup_dir):
         os.makedirs(backup_dir)
 
-    return backup_dir
-
-
-def find_next_version(directory, base_name, ext):
     pattern = re.compile(
-        rf"^{re.escape(base_name)}{SUFFIX}(\d+){re.escape(ext)}$")
+        r"^{}_backup(\d{{3}}){}$".format(
+            re.escape(file_name),
+            re.escape(ext)
+        )
+    )
+
     max_num = 0
 
-    for f in os.listdir(directory):
-        m = pattern.match(f)
-        if m:
-            num = int(m.group(1))
+    for backup_file in os.listdir(backup_dir):
+        match = pattern.match(backup_file)
+        if match:
+            num = int(match.group(1))
             if num > max_num:
                 max_num = num
 
-    return max_num + 1
+    next_num = max_num + 1
+
+    backup_name = "{}_backup{:04d}{}".format(
+        file_name,
+        next_num,
+        ext
+    )
+
+    backup_path = os.path.join(backup_dir, backup_name)
+
+    shutil.copy2(scene_path, backup_path)
+
+    print(u"元ファイルを保存しました: {}".format(scene_path))
+    print(u"バックアップ保存完了: {}".format(backup_path))
 
 
-def cleanup_old_files(directory, base_name, ext, limit):
-    pattern = re.compile(
-        rf"^{re.escape(base_name)}{SUFFIX}(\d+){re.escape(ext)}$")
-
-    files = []
-    for f in os.listdir(directory):
-        m = pattern.match(f)
-        if m:
-            num = int(m.group(1))
-            full = os.path.join(directory, f)
-            files.append((num, full))
-
-    files.sort()
-
-    if len(files) <= limit:
-        return
-
-    delete_count = len(files) - limit
-
-    for i in range(delete_count):
-        try:
-            os.remove(files[i][1])
-            print("Deleted old backup:", files[i][1])
-        except Exception as e:
-            print("Delete error:", e)
-
-
-def incremental_save():
-    cfg = load_config()
-
-    if not cfg["enable"]:
-        return
-
-    scene_path = get_scene_path()
+def save_clean_version():
+    scene_path = cmds.file(q=True, sceneName=True)
 
     if not scene_path:
+        cmds.warning(u"シーンが保存されていません。先に保存してください。")
         return
 
-    base_dir, name, ext = split_path(scene_path)
-    backup_dir = get_backup_dir(base_dir, cfg)
+    cmds.file(save=True)
 
-    next_num = find_next_version(backup_dir, name, ext)
-    num_str = str(next_num).zfill(DIGITS)
+    scene_dir = os.path.dirname(scene_path)
+    scene_name = os.path.basename(scene_path)
+    file_name, ext = os.path.splitext(scene_name)
 
-    new_path = os.path.join(
-        backup_dir,
-        f"{name}{SUFFIX}{num_str}{ext}"
+    clean_name = re.sub(
+        r'(_v_\d+|_ver_\d+)',
+        '_',
+        file_name,
+        flags=re.IGNORECASE
     )
 
-    try:
-        cmds.file(rename=new_path)
-        cmds.file(save=True, type='mayaAscii' if ext ==
-                  '.ma' else 'mayaBinary')
-        cmds.file(rename=scene_path)
+    clean_scene_path = os.path.join(scene_dir, clean_name + ext)
 
-        cleanup_old_files(backup_dir, name, ext, cfg["limit"])
+    file_type = cmds.file(q=True, type=True)
+    file_type = file_type[0] if file_type else "mayaBinary"
 
-        print("Incremental Save:", new_path)
+    cmds.file(rename=clean_scene_path)
+    cmds.file(save=True, type=file_type)
 
-    except Exception as e:
-        print("Incremental Save Error:", e)
+    print(u"整理版ファイル保存完了: {}".format(clean_scene_path))
+
+    cmds.file(rename=scene_path)
+    refresh_ui_info()
 
 
-# コールバック
-def register_callback():
-    global CALLBACK_ID
+# UI用の処理関数
+def get_scene_name():
+    scene_path = cmds.file(q=True, sceneName=True)
+    if not scene_path:
+        return u"未保存シーン"
+    return os.path.basename(scene_path)
 
-    try:
-        cmds.scriptJob(kill=CALLBACK_ID, force=True)
-    except:
-        pass
 
-    CALLBACK_ID = cmds.scriptJob(
-        event=["SceneSaved", incremental_save],
-        protected=True
+def get_default_backup_folder():
+    scene_path = cmds.file(q=True, sceneName=True)
+    if not scene_path:
+        return ""
+
+    scene_dir = os.path.dirname(scene_path)
+    return os.path.join(scene_dir, "_backup")
+
+
+def browse_backup_folder(*args):
+    folder = cmds.fileDialog2(
+        dialogStyle=2,
+        fileMode=3,
+        caption=u"バックアップフォルダを選択"
     )
 
-    print("Callback Registered")
+    if folder:
+        cmds.textField(
+            "backupFolderField",
+            e=True,
+            text=folder[0]
+        )
 
 
-# UI
-def build_ui():
+def refresh_ui_info(*args):
+    if cmds.textField("sceneNameField", exists=True):
+        cmds.textField(
+            "sceneNameField",
+            e=True,
+            text=get_scene_name()
+        )
+
+    if cmds.textField("backupFolderField", exists=True):
+        current_text = cmds.textField(
+            "backupFolderField", q=True, text=True)
+        if not current_text:
+            cmds.textField(
+                "backupFolderField",
+                e=True,
+                text=get_default_backup_folder()
+            )
+
+
+# UI構築
+def ui_run():
+
     if cmds.window(WINDOW_NAME, exists=True):
         cmds.deleteUI(WINDOW_NAME)
 
-    cfg = load_config()
-
-    win = cmds.window(
+    cmds.window(
         WINDOW_NAME,
-        title="Incremental Save Tool",
-        widthHeight=(300, 200)
-    )
-    cmds.columnLayout(adjustableColumn=True, rowSpacing=10)
-
-    # ON/OFF
-    enable_cb = cmds.checkBox(
-        label="Enable Incremental Save",
-        value=cfg["enable"]
+        title=u"TM Backup Tool",
+        widthHeight=(700, 200),
+        sizeable=True
     )
 
-    # 保存数
-    cmds.text(label="Max Backup Count")
-    limit_if = cmds.intField(value=cfg["limit"], minValue=1)
+    main_layout = cmds.columnLayout(adjustableColumn=True)
 
-    # フォルダ分離
-    sub_cb = cmds.checkBox(
-        label="Use Subfolder",
-        value=cfg["use_subfolder"]
+    cmds.separator(height=10, style='none')
+
+    # 現在シーン名
+    cmds.text(label=u"現在のシーン名", align='left')
+    cmds.textField(
+        "sceneNameField",
+        text=get_scene_name(),
+        editable=False
     )
 
-    cmds.text(label="Subfolder Name")
-    sub_name_tf = cmds.textField(text=cfg["subfolder_name"])
+    cmds.separator(height=10, style='none')
 
-    def apply_settings(*args):
-        new_cfg = {
-            "enable": cmds.checkBox(enable_cb, q=True, v=True),
-            "limit": cmds.intField(limit_if, q=True, v=True),
-            "use_subfolder": cmds.checkBox(sub_cb, q=True, v=True),
-            "subfolder_name": cmds.textField(sub_name_tf, q=True, text=True)
-        }
+    # バックアップフォルダ
+    cmds.text(label=u"save_backup対象フォルダ", align='left')
 
-        save_config(new_cfg)
-        print("Settings Saved:", new_cfg)
+    backup_row = cmds.rowLayout(
+        numberOfColumns=2,
+        adjustableColumn=1,
+        columnAlign=(1, 'left'),
+        columnAttach=[(1, 'both', 0), (2, 'both', 5)]
+    )
 
-    cmds.button(label="Save Settings", command=apply_settings)
-    cmds.separator(height=10)
+    cmds.textField(
+        "backupFolderField",
+        text=get_default_backup_folder(),
+        editable=True
+    )
+
     cmds.button(
-        label="Register Callback",
-        command=lambda x: register_callback()
+        label=u"参照",
+        width=80,
+        command=browse_backup_folder
     )
 
-    cmds.showWindow(win)
+    cmds.setParent(main_layout)
+
+    cmds.separator(height=15, style='in')
+
+    # ボタン横並び
+    button_row = cmds.rowLayout(
+        numberOfColumns=2,
+        adjustableColumn=1,
+        columnWidth2=(350, 350),
+        columnAttach=[(1, 'both', 5), (2, 'both', 5)]
+    )
+
+    cmds.button(
+        label=u"save_backup 実行",
+        height=50,
+        command=lambda x: save_backup()
+    )
+
+    cmds.button(
+        label=u"save_clean_version 実行",
+        height=50,
+        command=lambda x: save_clean_version()
+    )
+
+    cmds.setParent(main_layout)
+
+    cmds.separator(height=10, style='none')
+
+    cmds.showWindow(WINDOW_NAME)
+
+    refresh_ui_info()
 
 
-# 起動
-build_ui()
+# 実行
+# build_backup_ui()

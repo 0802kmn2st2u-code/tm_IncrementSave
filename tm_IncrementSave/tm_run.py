@@ -1,9 +1,5 @@
-from tm_script.tm_UpdateTool import tm_update_tool
+from tm_script.tm_IncrementSave import tm_increment_save
 import importlib
 
-if __name__ == "__main__":
-    try:
-        importlib.reload(tm_update_tool)
-        tm_update_tool.tmUpdateTool.run()
-    except:
-        print("更新できなかったよ。")
+importlib.reload(tm_increment_save)
+tm_increment_save.ui_run()
